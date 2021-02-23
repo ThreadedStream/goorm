@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 	"regexp"
 	"strings"
@@ -20,25 +19,36 @@ const (
 	NOTNULL           = 0x4
 	LENGTH            = 0x5
 	PK                = 0x6
-	TABLE			  = 0x7
+	TABLE             = 0x7
+)
+
+var lineNum = 1
+
+const (
+	COLUMN_NAME  string = "column_name"
+	TABLE_NAME   string = "table_name"
+	COLUMN_PROPS string = "column_props"
 )
 
 /*
-	TODO: Transform input into the following format
-	Parsed version: TABLE = <table_name>, COLUMN_NAME = <column_name>, COLUMN_PROPS = [properties of columns...]
- */
+	Parsed version:
+		[table_name] = {
+					column_name1: [properties of column_name1...]
+	                column_name2: [properties of column_name2...]
+                  }
+*/
 
-var statements = make(map[int][]string, 0)
+var statements = make(map[string]map[string][]interface{}, 0)
 
 var tokensToStrings = map[Tokens]string{
 	IDENTIFIER: "^[_a-z]\\w*$",
-	STRING:     "string",
+	STRING:     "string=[0-9]+",
 	INT:        "int",
 	FLOAT:      "float",
 	NOTNULL:    "!null",
 	LENGTH:     "length=[0-9]+",
 	PK:         "pk",
-	TABLE: 	    "table=[a-zA-Z[_]*[0-9]*",
+	TABLE:      "table=[a-zA-Z[_]*[0-9]*",
 }
 
 func readRaw(path string) (string, error) {
@@ -55,30 +65,66 @@ func readRaw(path string) (string, error) {
 	contents := string(bs)
 	return contents, nil
 }
+func parseSchema(contents string) error {
+	blocks := strings.Split(contents, "\n\n")
+	for _, block := range blocks {
+		err := parseBlock(block)
+		if err != nil {
+			return err
+		}
+	}
 
-func parseSchema(contents string) {
+	return nil
+}
+
+func parseBlock(contents string) error {
 	currIndex := 0
 	startIndex := 0
 
-	currIndex++
-	lineNum := 1
+	//Parse table name
+	if contents[0] == 0xA {
+		currIndex++
+	}
+	for contents[currIndex] != 0xA {
+		currIndex++
+	}
+	err, tableName := parseTableName(contents[0:currIndex])
+	if err != nil {
+		return err
+	}
 	for currIndex < len(contents) {
+		startIndex = currIndex
+		currIndex++
 		for contents[currIndex] != 0xA {
 			currIndex++
+			if currIndex == len(contents) {
+				break
+			}
 		}
 
-		err := parseLine(contents[startIndex:currIndex], lineNum)
+		err = parseLine(contents[startIndex:currIndex], tableName)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 		startIndex = currIndex
 		currIndex++
 		lineNum++
 		continue
 	}
+	return nil
 }
 
-func parseLine(line string, lineNum int) error {
+func parseTableName(contents string) (error, string) {
+	split := strings.Split(contents, "=")
+	if strings.TrimSpace(split[0]) != "table" {
+		return errors.New(fmt.Sprintf("Expected 'table', found %s", split[0])), ""
+	}
+	split[1] = strings.TrimSpace(split[1])
+	statements[split[1]] = make(map[string][]interface{}, 0)
+	return nil, split[1]
+}
+
+func parseLine(line string, tableName string) error {
 	currIndex := 0
 	currToken := ""
 	parenStart := -1
@@ -92,16 +138,16 @@ func parseLine(line string, lineNum int) error {
 				return errors.New(fmt.Sprintf("Expected '(' or ' ' at line %d\n", lineNum))
 			}
 		}
-		statements[lineNum] = append(statements[lineNum], currToken)
+		columnName := strings.TrimSpace(currToken)
 		currToken = ""
-		if line[currIndex] == ' ' && line[currIndex+1] == '('{
+		if line[currIndex] == ' ' && line[currIndex+1] == '(' {
 			currIndex++
 			parenStart = currIndex
 			currIndex++
-		}else if line[currIndex] == '('{
+		} else if line[currIndex] == '(' {
 			parenStart = currIndex
 			currIndex++
-		}else {
+		} else {
 			return errors.New(fmt.Sprintf("Expected '(' at line %d\n", lineNum))
 		}
 		for line[currIndex] != ')' {
@@ -111,7 +157,7 @@ func parseLine(line string, lineNum int) error {
 			currIndex++
 		}
 		parenEnd = currIndex
-		err := parseParentheses(line[parenStart+1:parenEnd], lineNum)
+		err := parseParentheses(line[parenStart+1:parenEnd], tableName, columnName)
 		if err != nil {
 			return err
 		}
@@ -120,35 +166,34 @@ func parseLine(line string, lineNum int) error {
 	return nil
 }
 
-
-func parseParentheses(contents string, lineNum int) error {
+func parseParentheses(contents string, tableName string, columnName string) error {
 	params := strings.Split(contents, ",")
 	prettifyParams(params)
 	for _, token := range params {
 		switch token {
 		case "string":
-			statements[lineNum] = append(statements[lineNum], tokensToStrings[STRING])
+			statements[tableName][columnName] = append(statements[tableName][columnName], tokensToStrings[STRING])
 			break
 		case "int":
-			statements[lineNum] = append(statements[lineNum], tokensToStrings[INT])
+			statements[tableName][columnName] = append(statements[tableName][columnName], tokensToStrings[INT])
 			break
 		case "float":
-			statements[lineNum] = append(statements[lineNum], tokensToStrings[FLOAT])
+			statements[tableName][columnName] = append(statements[tableName][columnName], tokensToStrings[FLOAT])
 			break
 		case "!null":
-			statements[lineNum] = append(statements[lineNum], tokensToStrings[NOTNULL])
+			statements[tableName][columnName] = append(statements[tableName][columnName], tokensToStrings[NOTNULL])
 			break
 		case "pk":
-			statements[lineNum] = append(statements[lineNum], tokensToStrings[PK])
+			statements[tableName][columnName] = append(statements[tableName][columnName], tokensToStrings[PK])
 			break
 		default:
-			matchesLength, _ := regexp.MatchString(tokensToStrings[LENGTH], token)
-			matchesTable, _ := regexp.MatchString(tokensToStrings[TABLE], token)
-			if matchesLength {
-				statements[lineNum] = append(statements[lineNum], token)
-			} else if matchesTable {
-				statements[lineNum] = append(statements[lineNum], token)
-			} else{
+			matchesString, _ := regexp.MatchString(tokensToStrings[STRING], token)
+			if matchesString {
+				stringToken := make([]string, 0)
+				strs := strings.Split(token, "=")
+				stringToken = append(stringToken, strings.TrimSpace(strs[0]), strings.TrimSpace(strs[1]))
+				statements[tableName][columnName] = append(statements[tableName][columnName], stringToken)
+			} else {
 				return errors.New(fmt.Sprintf("Unexpected identifier %s at line %d\n", token, lineNum))
 			}
 		}

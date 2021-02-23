@@ -1,4 +1,9 @@
 table=person
 id (int, !null, pk)
-name (string, length=50, !null)
-surname (string, length=70, !null)
+name (string=50,!null)
+surname (string=50,!null)
+
+
+table=employee
+id (int, pk)
+name (string=50,!null)
