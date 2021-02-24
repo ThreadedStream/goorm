@@ -9,17 +9,18 @@ import (
 	"strings"
 )
 
-type Tokens int
+type SchemaToken int
 
 const (
-	IDENTIFIER Tokens = 0x0
-	STRING            = 0x1
-	INT               = 0x2
-	FLOAT             = 0x3
-	NOTNULL           = 0x4
-	LENGTH            = 0x5
-	PK                = 0x6
-	TABLE             = 0x7
+	SIDENTIFIER SchemaToken = 0x0
+	STRING                  = 0x1
+	INT                     = 0x2
+	FLOAT                   = 0x3
+	NOTNULL                 = 0x4
+	LENGTH                  = 0x5
+	PK                      = 0x6
+	TABLE                   = 0x7
+	SERIAL                  = 0x8
 )
 
 var lineNum = 1
@@ -40,15 +41,16 @@ const (
 
 var statements = make(map[string]map[string][]interface{}, 0)
 
-var tokensToStrings = map[Tokens]string{
-	IDENTIFIER: "^[_a-z]\\w*$",
-	STRING:     "string=[0-9]+",
-	INT:        "int",
-	FLOAT:      "float",
-	NOTNULL:    "!null",
-	LENGTH:     "length=[0-9]+",
-	PK:         "pk",
-	TABLE:      "table=[a-zA-Z[_]*[0-9]*",
+var tokensToStrings = map[SchemaToken]string{
+	SIDENTIFIER: "^[_a-z]\\w*$",
+	STRING:      "string=[0-9]+",
+	INT:         "int",
+	FLOAT:       "float",
+	NOTNULL:     "!null",
+	LENGTH:      "length=[0-9]+",
+	PK:          "pk",
+	TABLE:       "table=[a-zA-Z[_]*[0-9]*",
+	SERIAL:      "serial",
 }
 
 func readRaw(path string) (string, error) {
@@ -186,6 +188,8 @@ func parseParentheses(contents string, tableName string, columnName string) erro
 		case "pk":
 			statements[tableName][columnName] = append(statements[tableName][columnName], tokensToStrings[PK])
 			break
+		case "serial":
+			statements[tableName][columnName] = append(statements[tableName][columnName], tokensToStrings[SERIAL])
 		default:
 			matchesString, _ := regexp.MatchString(tokensToStrings[STRING], token)
 			if matchesString {
